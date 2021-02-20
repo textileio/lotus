@@ -17,9 +17,11 @@ import (
 	"github.com/filecoin-project/lotus/build"
 	"github.com/filecoin-project/lotus/chain/actors"
 	"github.com/filecoin-project/lotus/chain/actors/adt"
+	"github.com/filecoin-project/lotus/chain/actors/builtin"
 	"github.com/filecoin-project/lotus/chain/actors/builtin/verifreg"
 	"github.com/filecoin-project/lotus/chain/types"
 	lcli "github.com/filecoin-project/lotus/cli"
+	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 )
 
@@ -109,6 +111,11 @@ var verifRegVerifyClientCmd = &cli.Command{
 			Name:  "from",
 			Usage: "specify your verifier address to send the message from",
 		},
+		&cli.StringFlag{
+			Name:  "notary-msigaddr",
+			Usage: "specify a notary msig from which `from` is a signer (optional)",
+			Value: "",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		froms := cctx.String("from")
@@ -147,21 +154,43 @@ var verifRegVerifyClientCmd = &cli.Command{
 		defer closer()
 		ctx := lcli.ReqContext(cctx)
 
-		msg := &types.Message{
-			To:     verifreg.Address,
-			From:   fromk,
-			Method: verifreg.Methods.AddVerifiedClient,
-			Params: params,
+		var msgCid cid.Cid
+		flagNotaryMsig := cctx.String("notary-msigaddr")
+		if flagNotaryMsig == "" {
+			msg := &types.Message{
+				To:     verifreg.Address,
+				From:   fromk,
+				Method: verifreg.Methods.AddVerifiedClient,
+				Params: params,
+			}
+			smsg, err := api.MpoolPushMessage(ctx, msg, nil)
+			if err != nil {
+				return err
+			}
+			msgCid = smsg.Cid()
+			fmt.Printf("message sent, now waiting on cid: %s\n", msgCid)
+		} else {
+			notaryMsig, err := address.NewFromString(flagNotaryMsig)
+			if err != nil {
+				return err
+			}
+			act, err := api.StateGetActor(ctx, notaryMsig, types.EmptyTSK)
+			if err != nil {
+				return fmt.Errorf("failed to look up multisig %s: %w", notaryMsig, err)
+			}
+
+			if !builtin.IsMultisigActor(act.Code) {
+				return fmt.Errorf("actor %s is not a multisig actor", notaryMsig)
+			}
+
+			msgCid, err = api.MsigPropose(ctx, notaryMsig, verifreg.Address, types.NewInt(0), fromk, uint64(verifreg.Methods.AddVerifiedClient), params)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("propose message sent, now watiting on cid: %s\n", msgCid)
 		}
 
-		smsg, err := api.MpoolPushMessage(ctx, msg, nil)
-		if err != nil {
-			return err
-		}
-
-		fmt.Printf("message sent, now waiting on cid: %s\n", smsg.Cid())
-
-		mwait, err := api.StateWaitMsg(ctx, smsg.Cid(), build.MessageConfidence)
+		mwait, err := api.StateWaitMsg(ctx, msgCid, build.MessageConfidence)
 		if err != nil {
 			return err
 		}
