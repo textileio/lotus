@@ -1,0 +1,1 @@
+./lotus-shed verifreg verify-client --from f1n4kuihubfesg55brkx5ntwqyglvbhydxjfodwra --notary-msigaddr f2kb4izxsxu2jyyslzwmv2sfbrgpld56efedgru5i <targetaddr> <size>
